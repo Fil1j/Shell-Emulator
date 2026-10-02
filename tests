@@ -1,0 +1,110 @@
+"""Модульные тесты прототипа эмулятора командной оболочки.
+
+Запуск из корня проекта::
+
+    PYTHONPATH=src python3 -m unittest discover -s tests -v
+"""
+
+import contextlib
+import getpass
+import io
+import socket
+import unittest
+
+import shell_emulator as shell
+
+
+class ParseLineTests(unittest.TestCase):
+    """Проверка разбора строки на токены."""
+
+    def test_plain_arguments(self):
+        """Аргументы без кавычек делятся по пробелам."""
+        self.assertEqual(shell.parse_line("ls -la /tmp"),
+                         ["ls", "-la", "/tmp"])
+
+    def test_double_and_single_quotes(self):
+        """Текст в кавычках остаётся одним аргументом."""
+        self.assertEqual(shell.parse_line("ls \"My Docs\" 'a b' c"),
+                         ["ls", "My Docs", "a b", "c"])
+
+    def test_empty_line(self):
+        """Строка из пробелов даёт пустой список."""
+        self.assertEqual(shell.parse_line("   "), [])
+
+    def test_unclosed_quote(self):
+        """Незакрытая кавычка вызывает ShellError."""
+        with self.assertRaises(shell.ShellError):
+            shell.parse_line('echo "unclosed')
+
+
+class ExecuteTests(unittest.TestCase):
+    """Проверка выполнения команд."""
+
+    def run_command(self, tokens):
+        """Выполнить команду и вернуть всё, что она напечатала.
+
+        Args:
+            tokens (list[str]): Имя команды и аргументы.
+
+        Returns:
+            str: Захваченный stdout.
+        """
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            shell.execute(tokens)
+        return buffer.getvalue()
+
+    def test_ls_stub(self):
+        """ls печатает своё имя и аргументы."""
+        self.assertEqual(self.run_command(["ls", "a", "b c"]),
+                         "ls: аргументы = ['a', 'b c']\n")
+
+    def test_cd_stub(self):
+        """cd без аргументов печатает пустой список."""
+        self.assertEqual(self.run_command(["cd"]), "cd: аргументы = []\n")
+
+    def test_empty_tokens(self):
+        """Пустой список токенов ничего не делает."""
+        self.assertEqual(self.run_command([]), "")
+
+    def test_unknown_command(self):
+        """Неизвестная команда вызывает ShellError."""
+        with self.assertRaises(shell.ShellError):
+            shell.execute(["foo"])
+
+    def test_exit_default_code(self):
+        """exit без аргумента завершает работу с кодом 0."""
+        with self.assertRaises(SystemExit) as context:
+            shell.execute(["exit"])
+        self.assertEqual(context.exception.code, 0)
+
+    def test_exit_custom_code(self):
+        """exit 3 завершает работу с кодом 3."""
+        with self.assertRaises(SystemExit) as context:
+            shell.execute(["exit", "3"])
+        self.assertEqual(context.exception.code, 3)
+
+    def test_exit_bad_argument(self):
+        """Нечисловой аргумент exit вызывает ShellError."""
+        with self.assertRaises(shell.ShellError):
+            shell.execute(["exit", "abc"])
+
+    def test_exit_too_many_arguments(self):
+        """Лишние аргументы exit вызывают ShellError."""
+        with self.assertRaises(shell.ShellError):
+            shell.execute(["exit", "1", "2"])
+
+
+class PromptTests(unittest.TestCase):
+    """Проверка приглашения к вводу."""
+
+    def test_prompt_uses_os_data(self):
+        """Приглашение содержит имя пользователя и хоста из ОС."""
+        prompt = shell.get_prompt()
+        expected = f"{getpass.getuser()}@{socket.gethostname()}:"
+        self.assertTrue(prompt.startswith(expected))
+        self.assertTrue(prompt.endswith("$ "))
+
+
+if __name__ == "__main__":
+    unittest.main()
