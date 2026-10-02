@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Прототип эмулятора командной оболочки (CLI).
+
+Возможности этапа 1:
+    * приглашение к вводу строится из реальных данных ОС;
+    * парсер учитывает кавычки (одинарные и двойные);
+    * сообщения об ошибках (неизвестная команда, неверные аргументы);
+    * команды-заглушки ls и cd, команда exit.
+
+Пример запуска::
+
+    $ python3 src/shell_emulator.py
+    user@host:~$ ls "My Documents" -la
+    ls: аргументы = ['My Documents', '-la']
+    user@host:~$ exit 0
+"""
+
+import getpass
+import os
+import shlex
+import socket
+import sys
+
+
+class ShellError(Exception):
+    """Ошибка выполнения команды.
+
+    Текст исключения предназначен для вывода пользователю: он сообщает,
+    что именно пошло не так (неизвестная команда, неверные аргументы,
+    ошибка разбора строки).
+    """
+
+
+def get_prompt():
+    """Сформировать приглашение к вводу.
+
+    Данные берутся из операционной системы: имя пользователя, имя хоста
+    и текущий каталог. Домашний каталог пользователя заменяется на ``~``.
+
+    Returns:
+        str: Строка вида ``username@hostname:~$ `` (с пробелом в конце).
+    """
+    try:
+        username = getpass.getuser()
+    except (KeyError, OSError):
+        username = "user"
+    hostname = socket.gethostname()
+
+    cwd = os.getcwd()
+    home = os.path.expanduser("~")
+    if cwd == home:
+        cwd = "~"
+    elif cwd.startswith(home + os.sep):
+        cwd = "~" + cwd[len(home):]
+
+    return f"{username}@{hostname}:{cwd}$ "
+
+
+def parse_line(line):
+    """Разобрать строку на токены с учётом кавычек.
+
+    Аргументы разделяются пробелами. Текст в одинарных или двойных
+    кавычках считается одним аргументом, сами кавычки в результат
+    не попадают. Обратный слеш экранирует следующий символ.
+
+    Args:
+        line (str): Введённая пользователем строка.
+
+    Returns:
+        list[str]: Список токенов; пустой список для пустой строки.
+
+    Raises:
+        ShellError: Если кавычка или экранирование не закрыты.
+    """
+    try:
+        return shlex.split(line, posix=True)
+    except ValueError as error:
+        raise ShellError(f"ошибка разбора: {error}") from error
+
+
+def print_stub(name, args):
+    """Вывести имя команды-заглушки и список её аргументов.
+
+    Args:
+        name (str): Имя команды.
+        args (list[str]): Аргументы, переданные команде.
+    """
+    print(f"{name}: аргументы = {args}")
+
+
+def cmd_ls(args):
+    """Выполнить заглушку команды ``ls``.
+
+    Args:
+        args (list[str]): Аргументы команды.
+    """
+    print_stub("ls", args)
+
+
+def cmd_cd(args):
+    """Выполнить заглушку команды ``cd``.
+
+    Текущий каталог не меняется.
+
+    Args:
+        args (list[str]): Аргументы команды.
+    """
+    print_stub("cd", args)
+
+
+def cmd_exit(args):
+    """Завершить работу эмулятора.
+
+    Args:
+        args (list[str]): Необязательный код возврата (целое число).
+            Если не указан, используется 0.
+
+    Raises:
+        ShellError: Если аргументов больше одного или аргумент
+            не является целым числом.
+        SystemExit: Всегда при корректных аргументах; несёт код возврата.
+    """
+    if len(args) > 1:
+        raise ShellError("exit: слишком много аргументов")
+    code = 0
+    if args:
+        try:
+            code = int(args[0])
+        except ValueError:
+            raise ShellError(
+                f"exit: неверный аргумент: '{args[0]}' "
+                "(требуется целое число)"
+            ) from None
+    sys.exit(code)
+
+
+COMMANDS = {
+    "ls": cmd_ls,
+    "cd": cmd_cd,
+    "exit": cmd_exit,
+}
+"""dict[str, callable]: Таблица команд «имя -> обработчик».
+
+Чтобы добавить команду, нужно написать функцию с одним параметром
+(списком аргументов) и зарегистрировать её в этом словаре.
+"""
+
+
+def execute(tokens):
+    """Выполнить команду, заданную списком токенов.
+
+    Args:
+        tokens (list[str]): Первый элемент - имя команды,
+            остальные - её аргументы. Пустой список игнорируется.
+
+    Raises:
+        ShellError: Если команда не найдена или получила неверные
+            аргументы.
+    """
+    if not tokens:
+        return
+    name, args = tokens[0], tokens[1:]
+    handler = COMMANDS.get(name)
+    if handler is None:
+        raise ShellError(f"{name}: команда не найдена")
+    handler(args)
+
+
+def main():
+    """Запустить главный цикл чтения и выполнения команд.
+
+    Ctrl+D (конец ввода) завершает работу, Ctrl+C отменяет текущую
+    строку. Ошибки команд выводятся в stderr, цикл продолжается.
+
+    Returns:
+        int: Код возврата процесса (0 при выходе по концу ввода).
+    """
+    while True:
+        try:
+            line = input(get_prompt())
+        except EOFError:
+            print()
+            break
+        except KeyboardInterrupt:
+            print()
+            continue
+
+        try:
+            execute(parse_line(line))
+        except ShellError as error:
+            print(error, file=sys.stderr)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
